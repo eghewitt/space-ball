@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Pastel Ball Merge Arena</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #121214;
+            color: #ffffff;
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+        #scoreboard {
+            font-size: 24px;
+            margin-bottom: 10px;
+            font-weight: bold;
+            letter-spacing: 1px;
+        }
+        .pink-text { color: #ff66cc; }
+        .yellow-text { color: #ffee55; }
+        canvas {
+            border: 4px solid #333;
+            background-color: #18181c;
+            box-shadow: 0 0 25px rgba(0,0,0,0.7);
+        }
+        #gameOver {
+            display: none;
+            position: absolute;
+            font-size: 48px;
+            font-weight: bold;
+            text-shadow: 2px 2px 12px rgba(0,0,0,0.9);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="scoreboard">
+        <span class="pink-text">Pink Team</span>: <span id="blueCount">0</span> | 
+        <span class="yellow-text">Yellow Team</span>: <span id="redCount">0</span>
+    </div>
+    <div id="gameOver"></div>
+    <canvas id="arena" width="800" height="600"></canvas>
+
+    <script>
+        const canvas = document.getElementById('arena');
+        const ctx = canvas.getContext('2d');
+        const blueCountEl = document.getElementById('blueCount');
+        const redCountEl = document.getElementById('redCount');
+        const gameOverEl = document.getElementById('gameOver');
+
+        const INITIAL_BALL_COUNT = 20; 
+        const MIN_RADIUS = 8;
+        const BASE_SPEED = 2;
+        let balls = [];
+        let gameOver = false;
+
+        class Ball {
+            constructor(x, y, radius, team, isSplitChild = false) {
+                this.x = x;
+                this.y = y;
+                this.radius = radius;
+                this.team = team; // Internal logic uses 'blue' (Pink) and 'red' (Yellow)
+                this.isSplitChild = isSplitChild; // If true, it renders Purple
+                
+                const angle = Math.random() * Math.PI * 2;
+                this.vx = Math.cos(angle) * BASE_SPEED;
+                this.vy = Math.sin(angle) * BASE_SPEED;
+                this.toRemove = false;
+            }
+
+            get mass() {
+                return Math.PI * this.radius * this.radius;
+            }
+
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                
+                // Color Assignment: Split children turn Purple, others retain Pink/Yellow
+                if (this.isSplitChild) {
+                    ctx.fillStyle = '#b055ff'; // Purple
+                } else {
+                    ctx.fillStyle = this.team === 'blue' ? '#ff66cc' : '#ffee55'; // Pink or Yellow
+                }
+
+                ctx.shadowBlur = this.radius * 0.6;
+                ctx.shadowColor = ctx.fillStyle;
+                ctx.fill();
+                ctx.closePath();
+                ctx.shadowBlur = 0; 
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+
+                if (this.x - this.radius < 0) { hashBounce(this, 'x', this.radius); }
+                if (this.x + this.radius > canvas.width) { hashBounce(this, 'x', canvas.width - this.radius); }
+                if (this.y - this.radius < 0) { hashBounce(this, 'y', this.radius); }
+                if (this.y + this.radius > canvas.height) { hashBounce(this, 'y', canvas.height - this.radius); }
+            }
+        }
+
+        function hashBounce(ball, axis, boundary) {
+            if (axis === 'x') {
+                ball.x = boundary;
+                ball.vx *= -1;
+            } else {
+                ball.y = boundary;
+                ball.vy *= -1;
+            }
+        }
+
+        function spawnBalls() {
+            for (let i = 0; i < INITIAL_BALL_COUNT; i++) {
+                balls.push(new Ball(Math.random() * (canvas.width / 3), Math.random() * canvas.height, MIN_RADIUS, 'blue'));
+                balls.push(new Ball(canvas.width - Math.random() * (canvas.width / 3), Math.random() * canvas.height, MIN_RADIUS, 'red'));
+            }
+        }
+
+        function handleCollisions() {
+            for (let i = 0; i < balls.length; i++) {
+                for (let j = i + 1; j < balls.length; j++) {
+                    let b1 = balls[i];
+                    let b2 = balls[j];
+
+                    if (b1.toRemove || b2.toRemove) continue;
+
+                    let dx = b2.x - b1.x;
+                    let dy = b2.y - b1.y;
+                    let distance = Math.sqrt(dx * dx + dy * dy);
+
+                    if (distance < b1.radius + b2.radius) {
+                        // Same original team -> Merge together
+                        if (b1.team === b2.team) {
+                            let totalMass = b1.mass + b2.mass;
+                            let newRadius = Math.sqrt(totalMass / Math.PI);
+                            
+                            if (b1.radius >= b2.radius) {
+                                b1.radius = newRadius;
+                                // If one was purple, the merged form carries it on safely
+                                if (b2.isSplitChild) b1.isSplitChild = true;
+                                b2.toRemove = true;
+                            } else {
+                                b2.radius = newRadius;
+                                if (b1.isSplitChild) b2.isSplitChild = true;
+                                b1.toRemove = true;
+                            }
+                        } 
+                        // Enemy clashing
+                        else {
+                            const sizeDifference = Math.abs(b1.radius - b2.radius);
+                            
+                            // Equal Size Clashes -> Bounce or Split into Purple
+                            if (sizeDifference < 1.5) {
+                                if (b1.radius > MIN_RADIUS * 2.5) {
+                                    splitBall(b1);
+                                    splitBall(b2);
+                                } else {
+                                    bounceBalls(b1, b2, dx, dy, distance);
+                                }
+                            } 
+                            // Unequal Size -> Absorb
+                            else {
+                                if (b1.radius > b2.radius) { absorb(b1, b2); } 
+                                else { absorb(b2, b1); }
+                            }
+                        }
+                    }
+                }
+            }
+            balls = balls.filter(b => !b.toRemove);
+        }
+
+        function absorb(winner, loser) {
+            let totalMass = winner.mass + loser.mass;
+            winner.radius = Math.sqrt(totalMass / Math.PI);
+            loser.toRemove = true;
+        }
+
+        function splitBall(ball) {
+            ball.toRemove = true;
+            let newRadius = ball.radius / 1.414;
+            if (newRadius < MIN_RADIUS) newRadius = MIN_RADIUS;
+
+            let offset = ball.radius;
+            // Spawning children with 'true' flags so they turn purple!
+            balls.push(new Ball(ball.x - offset, ball.y, newRadius, ball.team, true));
+            balls.push(new Ball(ball.x + offset, ball.y, newRadius, ball.team, true));
+        }
+
+        function bounceBalls(b1, b2, dx, dy, distance) {
+            let nx = dx / distance;
+            let ny = dy / distance;
+            let tx = -ny;
+            let ty = nx;
+
+            let dpTan1 = b1.vx * tx + b1.vy * ty;
+            let dpTan2 = b2.vx * tx + b2.vy * ty;
+            let dpNorm1 = b1.vx * nx + b1.vy * ny;
+            let dpNorm2 = b2.vx * nx + b2.vy * ny;
